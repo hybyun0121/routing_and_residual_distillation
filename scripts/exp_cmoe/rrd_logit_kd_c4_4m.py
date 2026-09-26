@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Resumable C4-40M runner for canonical RRD-1-stage-2607.
+"""Resumable C4-4M runner for RRD with final-logit distillation.
 
-This is an experiment-specific extension. It preserves the canonical loss,
-gradient boundary, optimizer groups, and constant learning rates while using a
-sequential C4 memory-mapped stream and an immutable 40M checkpoint.
+It uses CE + router CE + 2 * representation RMSE + logit KD on a sequential
+C4 memory-mapped stream and saves an immutable 4M checkpoint.
 """
 
 from __future__ import annotations
@@ -38,14 +37,14 @@ from scripts.exp_cmoe.cpt_train import (  # noqa: E402
     _trainable_delta_state,
 )
 
-STRATEGY = "rrd_1_stage_2607_c4_budget_scaling"
+STRATEGY = "rrd_logit_kd_c4_4m"
 SOURCE_STRATEGY = "rrd_1_stage_2607"
 SEQLEN = 2048
 BATCH_SIZE = 2
-DEFAULT_WINDOWS = 20_480
-DEFAULT_SAVE_STEPS = (10_240,)
-DEFAULT_VALIDATION_EVERY = 500
-DEFAULT_VALIDATION_BATCHES = 8
+DEFAULT_WINDOWS = 2_048
+DEFAULT_SAVE_STEPS = (1_024,)
+DEFAULT_VALIDATION_EVERY = 100
+DEFAULT_VALIDATION_BATCHES = 32
 
 
 def atomic_text(path: Path, value: str) -> None:
@@ -195,7 +194,7 @@ def resume_contract_sha256(
     contract: rrd2.Contract,
 ) -> str:
     payload = {
-        "schema": "rrd_1_stage_2607_c4_resume_v1",
+        "schema": "rrd_logit_kd_c4_4m_resume_v1",
         "source_strategy": SOURCE_STRATEGY,
         "teacher": str(contract.teacher),
         "moe_dir": str(contract.moe_dir),
@@ -212,7 +211,9 @@ def resume_contract_sha256(
         "expert_lr": float(base.EXPERT_LR),
         "router_outer_lr": float(base.ROUTER_OUTER_LR),
         "router_middle_lr": float(base.ROUTER_MIDDLE_LR),
-        "loss_weights": [base.CE_WEIGHT, base.ROUTER_WEIGHT, base.JOINT_RRD_WEIGHT],
+        "loss_weights": [base.CE_WEIGHT, base.ROUTER_WEIGHT, base.JOINT_RRD_WEIGHT, base.KD_WEIGHT],
+        "kd_temperature": base.KD_TEMPERATURE,
+        "kd_chunk_tokens": base.KD_CHUNK_TOKENS,
         "optimizer": "bitsandbytes.Adam8bit",
         "optimizer_betas": [0.9, 0.95],
         "lr_schedule": "constant",
@@ -236,7 +237,7 @@ def save_resume(
     elapsed_sec: float,
 ) -> None:
     payload = {
-        "schema": "rrd_1_stage_2607_c4_resume_v1",
+        "schema": "rrd_logit_kd_c4_4m_resume_v1",
         "contract_sha256": contract_sha256,
         "completed_step": int(completed_step),
         "trainable_state": {
@@ -267,7 +268,7 @@ def restore_resume(
     device: torch.device,
 ) -> dict[str, Any]:
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("schema") != "rrd_1_stage_2607_c4_resume_v1":
+    if payload.get("schema") != "rrd_logit_kd_c4_4m_resume_v1":
         raise ValueError(f"unsupported resume schema: {path}")
     if payload.get("contract_sha256") != contract_sha256:
         raise ValueError("resume contract mismatch; refusing to splice trajectories")
@@ -315,7 +316,7 @@ def checkpoint_manifest(
         "strategy": SOURCE_STRATEGY,
         "phase": STRATEGY,
         "run_name": args.output_dir.name,
-        "cpt_mode": "one_stage_true_stf_joint_rrd",
+        "cpt_mode": "one_stage_true_stf_joint_rrd_logit_kd",
         "cpt_source_moe_dir": str(contract.moe_dir),
         "cpt_teacher_model_path": str(contract.teacher),
         "cpt_calib_path": str(contract.train),
@@ -345,7 +346,10 @@ def checkpoint_manifest(
         "cpt_alpha_task": base.CE_WEIGHT,
         "cpt_alpha_router": base.ROUTER_WEIGHT,
         "cpt_alpha_residual": base.JOINT_RRD_WEIGHT,
-        "cpt_alpha_kd": 0.0,
+        "cpt_alpha_kd": base.KD_WEIGHT,
+        "cpt_kd_temperature": base.KD_TEMPERATURE,
+        "cpt_kd_chunk_tokens": base.KD_CHUNK_TOKENS,
+        "cpt_kd_loss_form": "temperature_squared_forward_KL_full_vocab_valid_next_token_mean",
         "cpt_ce_gradient_policy": "shared_and_routed_only",
         "cpt_joint_rrd_gradient_policy": "shared_and_routed_only",
         "cpt_router_gradient_policy": "true_stf_router_only",
@@ -381,7 +385,7 @@ def checkpoint_manifest(
         "cpt_save_trainable_delta": True,
         "cpt_skip_full_state_dict": True,
         "cpt_checkpoint_format": "base_plus_trainable_delta",
-        "cpt_resume_schema": "rrd_1_stage_2607_c4_resume_v1",
+        "cpt_resume_schema": "rrd_logit_kd_c4_4m_resume_v1",
         "cpt_resume_contract_sha256": contract_sha256,
         "cpt_intermediate_save": not final,
         "checkpoint_status": "saved",
@@ -484,6 +488,11 @@ def validation_batches(
 
 
 def train(args: argparse.Namespace, *, smoke_steps: int = 0) -> dict[str, Any]:
+    base.configure_logit_kd(1.0, 1.0, 128)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
     gate = audit_contract(args)
     if not gate.get("ok"):
         raise RuntimeError(json.dumps(gate, indent=2))
@@ -630,6 +639,7 @@ def train(args: argparse.Namespace, *, smoke_steps: int = 0) -> dict[str, Any]:
         )
         ids = ids_cpu.to(device)
         labels = ids.clone()
+        teacher_logits: dict[str, torch.Tensor] = {}
         targets = base.teacher_targets(
             contract,
             teacher,
@@ -639,11 +649,20 @@ def train(args: argparse.Namespace, *, smoke_steps: int = 0) -> dict[str, Any]:
             teacher_post_ln,
             activation_map,
             carve_manifest,
+            teacher_logits=teacher_logits,
         )
         optimizer.zero_grad(set_to_none=True)
         components.clear()
         output = student(input_ids=ids, labels=labels, use_cache=False)
         joint = base.joint_rmse(components, teacher_mlp_outs)
+        kd = base.logit_kd_loss(
+            output.logits,
+            teacher_logits["logits"],
+            labels,
+            temperature=base.KD_TEMPERATURE,
+            chunk_tokens=base.KD_CHUNK_TOKENS,
+        )
+        teacher_logits.clear()
         ce_grads = base.accumulate_loss_grads(
             output.loss,
             expert_params,
@@ -654,6 +673,12 @@ def train(args: argparse.Namespace, *, smoke_steps: int = 0) -> dict[str, Any]:
             joint,
             expert_params,
             scale=base.JOINT_RRD_WEIGHT,
+            retain_graph=True,
+        )
+        kd_grads = base.accumulate_loss_grads(
+            kd,
+            expert_params,
+            scale=base.KD_WEIGHT,
             retain_graph=False,
         )
         weight_errors = [
@@ -691,6 +716,7 @@ def train(args: argparse.Namespace, *, smoke_steps: int = 0) -> dict[str, Any]:
             first_audit = {
                 "ce_grad_norms": ce_grads,
                 "joint_rrd_grad_norms": joint_grads,
+                "logit_kd_grad_norms": kd_grads,
                 "router_grad_norms": router_grads,
                 "selected_weight_sum_reference": contract.topology.active,
                 "selected_weight_sum_max_deviation_from_active": max(
@@ -704,10 +730,12 @@ def train(args: argparse.Namespace, *, smoke_steps: int = 0) -> dict[str, Any]:
                 "loss_ce": float(output.loss.detach()),
                 "loss_router": float(router.detach()),
                 "loss_joint_rrd": float(joint.detach()),
+                "loss_logit_kd": float(kd.detach()),
                 "weighted_total": float(
                     output.loss.detach()
                     + router.detach()
                     + base.JOINT_RRD_WEIGHT * joint.detach()
+                    + base.KD_WEIGHT * kd.detach()
                 ),
                 "stf_hit_count": base.mean_layer_metric(
                     patch.layer_metrics,

@@ -28,7 +28,7 @@ DEFAULT_TOKENIZERS = {
     "llama_2_7b_hf": Path("models/Llama-2-7b-hf"),
     "qwen2_5_7b": Path("models/Qwen2.5-7B"),
 }
-BUDGET_WINDOWS = {"40m": 20_480}
+BUDGET_WINDOWS = {"4m": 2_048}
 
 
 def sha256_file(path: Path) -> str:
@@ -359,7 +359,7 @@ def build(args: argparse.Namespace) -> Path:
     train_shards = parse_int_set(args.train_shards)
     validation_shards = parse_int_set(args.validation_shards)
     if args.train_windows < max(BUDGET_WINDOWS.values()):
-        raise ValueError("C4-40M requires at least 20480 train windows")
+        raise ValueError("C4-4M requires at least 2048 train windows")
     if args.probe_windows > min(BUDGET_WINDOWS.values()):
         raise ValueError("probe windows exceed the 4M prefix")
 
@@ -601,7 +601,7 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
             "c4_dev",
             "c4_test",
             "train_anchor",
-            "train_seen_40m",
+            "train_seen_4m",
         ):
             file_row = manifest.get("files", {}).get(key, {})
             path = Path(str(file_row.get("path", "")))
@@ -659,7 +659,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer", action="append", default=[])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seqlen", type=int, default=2048)
-    parser.add_argument("--train-windows", type=int, default=20_480)
+    parser.add_argument("--train-windows", type=int, default=2_048)
     parser.add_argument("--calibration-windows", type=int, default=8)
     parser.add_argument("--eval-windows", type=int, default=256)
     parser.add_argument("--probe-windows", type=int, default=256)
