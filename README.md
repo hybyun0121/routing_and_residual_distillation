@@ -4,8 +4,6 @@ RRD (Router and Representation Distillation) continues training a carved mixture
 
 This repository contains the code needed for a Qwen2.5-7B S2A2E8 C4-4M run and response-only Tülu3-10K LoRA fine-tuning. It contains no data, model weights, checkpoints, or experiment logs. The data and model licenses apply separately. The CMoE carving source in `third_party/cmoe/` retains its MIT license; the adapted LLaMA-Factory modules retain the Apache-2.0 license.
 
-The commands below create a **new C4-calibrated run**. The historical C4-4M RRD + Logit-KD result used a WT2-calibrated carve, so this recipe must not be presented as an exact numerical reproduction of that checkpoint. The LoRA-SFT step below is a runnable continuation; it does not claim a historical SFT result from the 4M checkpoint.
-
 ## Setup
 
 Use Python 3.11+ and a CUDA build of PyTorch suitable for your GPU. Install the remaining packages, then run from the repository root:
