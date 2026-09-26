@@ -12,7 +12,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 from scripts.exp_cmoe.prepare_c4_4m import BUDGET_WINDOWS
 from scripts.exp_cmoe import rrd_1_stage_2607 as base
 from scripts.exp_cmoe.logit_distillation import logit_kd_loss
-from scripts.exp_cmoe.rrd_logit_kd_c4_4m import (
+from scripts.exp_cmoe.rrd_c4_4m import (
     DEFAULT_WINDOWS,
     make_contract,
     resume_contract_sha256,

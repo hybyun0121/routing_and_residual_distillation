@@ -1,6 +1,6 @@
 # RRD
 
-RRD (Router and Representation Distillation) continues training a carved mixture-of-experts model with language-model cross entropy, router supervision from a dense teacher, and joint representation RMSE. This release adds final-logit knowledge distillation: `CE + router CE + 2 × RMSE + KL(teacher || student)`, with KD weight 1 and temperature 1. Attention, embeddings, norms, and the LM head stay frozen; shared and routed experts and the MLP router are updated. Routing uses hard top-A selection with uniform expert aggregation.
+RRD (Router and Representation Distillation) continues training a carved mixture-of-experts model with language-model cross entropy, router supervision from a dense teacher, joint representation RMSE, and final-logit knowledge distillation: `CE + router CE + 2 × RMSE + KL(teacher || student)`, with KD weight 1 and temperature 1. Attention, embeddings, norms, and the LM head stay frozen; shared and routed experts and the MLP router are updated. Routing uses hard top-A selection with uniform expert aggregation.
 
 This repository contains the code needed for a Qwen2.5-7B S2A2E8 C4-4M run and response-only Tülu3-10K LoRA fine-tuning. It contains no data, model weights, checkpoints, or experiment logs. The data and model licenses apply separately. The CMoE carving source in `third_party/cmoe/` retains its MIT license; the adapted LLaMA-Factory modules retain the Apache-2.0 license.
 
@@ -77,15 +77,15 @@ RRD_ARGS=(
   --train-npy data/c4/qwen2_5_7b/train_master_seed0_n2048_seqlen2048.npy
   --validation-npy data/c4/qwen2_5_7b/c4_dev_seed0_n256_seqlen2048.npy
   --data-manifest data/c4/qwen2_5_7b/manifest.json
-  --output-dir outputs/rrd_kd4m --seed 0
+  --output-dir outputs/rrd4m --seed 0
 )
-python -m scripts.exp_cmoe.rrd_logit_kd_c4_4m audit "${RRD_ARGS[@]}"
-python -m scripts.exp_cmoe.rrd_logit_kd_c4_4m train "${RRD_ARGS[@]}"
+python -m scripts.exp_cmoe.rrd_c4_4m audit "${RRD_ARGS[@]}"
+python -m scripts.exp_cmoe.rrd_c4_4m train "${RRD_ARGS[@]}"
 ```
 
 ## 5. SFT
 
-LoRA fine-tuning starts from the frozen C4-4M RRD + Logit-KD checkpoint. The training target is response-only cross entropy; RRD, router, and KD losses are disabled during SFT. The reference LoRA settings are rank 8, alpha 32, dropout 0.1, learning rate `5.95e-5`, one epoch, and seeds 0–4. Run the command once per seed with a distinct output directory.
+LoRA fine-tuning starts from the frozen C4-4M RRD checkpoint. The training target is response-only cross entropy; distillation losses are disabled during SFT. The reference LoRA settings are rank 8, alpha 32, dropout 0.1, learning rate `5.95e-5`, one epoch, and seeds 0–4. Run the command once per seed with a distinct output directory.
 
 ```bash
 python -m scripts.exp_cmoe.cpt_train \
@@ -103,7 +103,7 @@ python -m scripts.exp_cmoe.cpt_train \
   --moe_type cmoe --cmoe_n_experts 8 --cmoe_n_activated 2 --cmoe_n_shared 2 \
   --freeze_router --router_arch mlp_h1024 --init_mlp_router_random \
   --mlp_router_aggregation uniform \
-  --init_trainable_delta_path outputs/rrd_kd4m/trainable_delta.pt \
+  --init_trainable_delta_path outputs/rrd4m/trainable_delta.pt \
   --skip_full_state_dict --write_ready_markers --output_dir outputs/sft/seed0
 ```
 
@@ -112,22 +112,22 @@ python -m scripts.exp_cmoe.cpt_train \
 Evaluate C4 held-out perplexity and the five zero-shot likelihood tasks after CPT. For SFT, pass the SFT adapter and its manifest to the same evaluator; keep the original CPT delta available.
 
 ```bash
-python -m scripts.exp_cmoe.measure_rrd_ppl outputs/rrd_kd4m \
+python -m scripts.exp_cmoe.measure_rrd_ppl outputs/rrd4m \
   --base-model-path models/Qwen2.5-7B --source-moe-dir models/rrd-carve \
-  --trainable-delta-path outputs/rrd_kd4m/trainable_delta.pt \
+  --trainable-delta-path outputs/rrd4m/trainable_delta.pt \
   --jsonl-path data/c4/qwen2_5_7b/c4_test_seed0_n256_seqlen2048.token_ids.jsonl \
-  --jsonl-name c4_test --output-json outputs/rrd_kd4m/ppl_c4.json
+  --jsonl-name c4_test --output-json outputs/rrd4m/ppl_c4.json
 python -m scripts.exp_cmoe.lmeval_cmoe \
   --base_model_path models/Qwen2.5-7B --source_moe_dir models/rrd-carve \
-  --manifest outputs/rrd_kd4m/manifest.json \
-  --trainable_delta_path outputs/rrd_kd4m/trainable_delta.pt \
+  --manifest outputs/rrd4m/manifest.json \
+  --trainable_delta_path outputs/rrd4m/trainable_delta.pt \
   --moe_type cmoe --cmoe_n_experts 8 --cmoe_n_activated 2 --cmoe_n_shared 2 \
   --tasks piqa,winogrande,arc_easy,arc_challenge,hellaswag \
-  --num_fewshot 0 --output_json outputs/rrd_kd4m/avg5.json
+  --num_fewshot 0 --output_json outputs/rrd4m/avg5.json
 python -m scripts.exp_cmoe.lmeval_cmoe \
   --base_model_path models/Qwen2.5-7B --source_moe_dir models/rrd-carve \
   --manifest outputs/sft/seed0/manifest.json \
-  --trainable_delta_path outputs/rrd_kd4m/trainable_delta.pt \
+  --trainable_delta_path outputs/rrd4m/trainable_delta.pt \
   --adapter_path outputs/sft/seed0/adapter \
   --moe_type cmoe --cmoe_n_experts 8 --cmoe_n_activated 2 --cmoe_n_shared 2 \
   --tasks piqa,winogrande,arc_easy,arc_challenge,hellaswag \
@@ -138,7 +138,7 @@ python -m scripts.exp_cmoe.lmeval_cmoe \
 
 | Stage | Recorded resource |
 | --- | --- |
-| RRD + Logit-KD C4-4M CPT | One NVIDIA RTX PRO 6000 Blackwell Server Edition GPU (about 96 GiB), BF16; 1,024 updates, 4,194,304 input tokens. |
+| RRD C4-4M CPT | One NVIDIA RTX PRO 6000 Blackwell Server Edition GPU (about 96 GiB), BF16; 1,024 updates, 4,194,304 input tokens. |
 | LoRA-SFT | Related 40M-source runs used one NVIDIA RTX A6000 48GB GPU per seed and peaked at about 41–42 GB. Memory for SFT from this 4M checkpoint has not been measured. |
 | Data | The 4M training `int32` array alone is 16 MiB; base model, carve, optimizer state, and checkpoints require substantially more disk. Keep enough free space for atomic checkpoint writes. |
 
@@ -146,4 +146,4 @@ These are observed resource classes, not a guarantee that other GPU or software 
 
 ## Code provenance
 
-The RRD one-stage training module and C4 runner derive from committed research snapshots `3e1a86098a4c78045f6c100034ac99734bf57b5b` and the LoRA-SFT trainer from `5d34737143eaf7deab2b3dabff95388bb6aac3ce`. This release removes machine-specific paths and experiment orchestration, narrows C4 preparation to 4M, and exposes model/topology arguments in the C4 runner. This adapted C4-4M + Logit-KD path has not been used for a new full GPU reproduction.
+The RRD w/o Logit-KD one-stage training module and RRD C4 runner derive from committed research snapshots `3e1a86098a4c78045f6c100034ac99734bf57b5b` and the LoRA-SFT trainer from `5d34737143eaf7deab2b3dabff95388bb6aac3ce`. This release removes machine-specific paths and experiment orchestration, narrows C4 preparation to 4M, and exposes model/topology arguments in the C4 runner. This adapted C4-4M RRD path has not been used for a new full GPU reproduction.

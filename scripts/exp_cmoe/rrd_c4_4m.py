@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resumable C4-4M runner for RRD with final-logit distillation.
+"""Resumable C4-4M RRD runner.
 
 It uses CE + router CE + 2 * representation RMSE + logit KD on a sequential
 C4 memory-mapped stream and saves an immutable 4M checkpoint.
@@ -37,7 +37,7 @@ from scripts.exp_cmoe.cpt_train import (  # noqa: E402
     _trainable_delta_state,
 )
 
-STRATEGY = "rrd_logit_kd_c4_4m"
+STRATEGY = "rrd_c4_4m"
 SOURCE_STRATEGY = "rrd_1_stage_2607"
 SEQLEN = 2048
 BATCH_SIZE = 2
@@ -194,7 +194,7 @@ def resume_contract_sha256(
     contract: rrd2.Contract,
 ) -> str:
     payload = {
-        "schema": "rrd_logit_kd_c4_4m_resume_v1",
+        "schema": "rrd_c4_4m_resume_v1",
         "source_strategy": SOURCE_STRATEGY,
         "teacher": str(contract.teacher),
         "moe_dir": str(contract.moe_dir),
@@ -237,7 +237,7 @@ def save_resume(
     elapsed_sec: float,
 ) -> None:
     payload = {
-        "schema": "rrd_logit_kd_c4_4m_resume_v1",
+        "schema": "rrd_c4_4m_resume_v1",
         "contract_sha256": contract_sha256,
         "completed_step": int(completed_step),
         "trainable_state": {
@@ -268,7 +268,7 @@ def restore_resume(
     device: torch.device,
 ) -> dict[str, Any]:
     payload = torch.load(path, map_location=device, weights_only=False)
-    if payload.get("schema") != "rrd_logit_kd_c4_4m_resume_v1":
+    if payload.get("schema") != "rrd_c4_4m_resume_v1":
         raise ValueError(f"unsupported resume schema: {path}")
     if payload.get("contract_sha256") != contract_sha256:
         raise ValueError("resume contract mismatch; refusing to splice trajectories")
@@ -316,7 +316,7 @@ def checkpoint_manifest(
         "strategy": SOURCE_STRATEGY,
         "phase": STRATEGY,
         "run_name": args.output_dir.name,
-        "cpt_mode": "one_stage_true_stf_joint_rrd_logit_kd",
+        "cpt_mode": "one_stage_true_stf_rrd",
         "cpt_source_moe_dir": str(contract.moe_dir),
         "cpt_teacher_model_path": str(contract.teacher),
         "cpt_calib_path": str(contract.train),
@@ -385,7 +385,7 @@ def checkpoint_manifest(
         "cpt_save_trainable_delta": True,
         "cpt_skip_full_state_dict": True,
         "cpt_checkpoint_format": "base_plus_trainable_delta",
-        "cpt_resume_schema": "rrd_logit_kd_c4_4m_resume_v1",
+        "cpt_resume_schema": "rrd_c4_4m_resume_v1",
         "cpt_resume_contract_sha256": contract_sha256,
         "cpt_intermediate_save": not final,
         "checkpoint_status": "saved",
