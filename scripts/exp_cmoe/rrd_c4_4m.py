@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Resumable C4-4M RRD runner.
 
-It uses CE + router CE + 2 * representation RMSE + logit KD on a sequential
-C4 memory-mapped stream and saves an immutable 4M checkpoint.
+It uses CE + routing loss + 2 x residual loss +
+KL(teacher logit || student logit) on a sequential C4 memory-mapped stream
+and saves an immutable 4M checkpoint.
 """
 
 from __future__ import annotations

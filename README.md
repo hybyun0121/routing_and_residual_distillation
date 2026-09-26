@@ -1,6 +1,6 @@
 # RRD
 
-RRD (Router and Representation Distillation) continues training a carved mixture-of-experts model with language-model cross entropy, router supervision from a dense teacher, joint representation RMSE, and final-logit knowledge distillation: `CE + router CE + 2 × RMSE + KL(teacher || student)`, with KD weight 1 and temperature 1. Attention, embeddings, norms, and the LM head stay frozen; shared and routed experts and the MLP router are updated. Routing uses hard top-A selection with uniform expert aggregation.
+RRD (Routing and Residual Distillation) continues training a carved mixture-of-experts model with language-model cross entropy, a routing loss, a residual loss, and final-logit knowledge distillation: `CE + routing loss + 2 x residual loss + KL(teacher logit || student logit)`, with KD weight 1 and temperature 1. Attention, embeddings, norms, and the LM head stay frozen; shared and routed experts and the MLP router are updated. Routing uses hard top-A selection with uniform expert aggregation.
 
 This repository contains the code needed for a Qwen2.5-7B S2A2E8 C4-4M run and response-only Tülu3-10K LoRA fine-tuning. It contains no data, model weights, checkpoints, or experiment logs. The data and model licenses apply separately. The CMoE carving source in `third_party/cmoe/` retains its MIT license; the adapted LLaMA-Factory modules retain the Apache-2.0 license.
 
@@ -68,7 +68,7 @@ python -m scripts.exp_cmoe.carve_cmoe_exact_token_ids \
 
 ## 4. CPT
 
-The C4 runner uses BF16, batch size 2, 2,048 tokens per window, constant Adam8bit, and 1,024 updates. It trains with CE, router CE, representation RMSE, and full-vocabulary logit KD. It writes a trainable delta and a resumable state. Run its contract audit before training; a two-update smoke run is available with the `smoke` command.
+The C4 runner uses BF16, batch size 2, 2,048 tokens per window, constant Adam8bit, and 1,024 updates. It trains with CE, routing loss, residual loss, and full-vocabulary logit KD. It writes a trainable delta and a resumable state. Run its contract audit before training; a two-update smoke run is available with the `smoke` command.
 
 ```bash
 RRD_ARGS=(
